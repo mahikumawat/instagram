@@ -12,10 +12,10 @@ declare(strict_types=1);
  */
 $apiUrl = defined('REEL_DOWNLOADER_API_URL')
     ? (string) REEL_DOWNLOADER_API_URL
-    : 'https://your-project.vercel.app/api/extract';
+    : 'https://instagram-delta-indol.vercel.app/api/extract';
 $apiToken = defined('REEL_DOWNLOADER_API_TOKEN')
     ? (string) REEL_DOWNLOADER_API_TOKEN
-    : 'CHANGE_ME_TOKEN';
+    : 'ba7289cad95b333eb685ceaf63fe423b55eae260aa14d5fe853481c9dde53506';
 
 function reel_downloader_fail(string $message, int $status = 400): void
 {
