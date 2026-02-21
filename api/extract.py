@@ -2,7 +2,7 @@ import json
 import os
 import re
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from yt_dlp import YoutubeDL
 
@@ -23,6 +23,31 @@ def is_supported_url(url: str) -> bool:
     except Exception:
         return False
     return any(h in host for h in SUPPORTED_HOSTS)
+
+
+def build_candidate_urls(url: str) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        value = value.strip()
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(url)
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    # Retry once without tracking query/hash from share links.
+    if parsed.scheme and parsed.netloc:
+        add(urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", "")))
+
+    # Canonicalize Instagram reel URLs to reduce extractor failures.
+    if "instagram.com" in host:
+        match = re.search(r"/(reel|reels|p)/([A-Za-z0-9_-]+)", parsed.path or "")
+        if match:
+            add(f"https://www.instagram.com/{match.group(1)}/{match.group(2)}/")
+
+    return candidates
 
 
 class handler(BaseHTTPRequestHandler):
@@ -70,23 +95,34 @@ class handler(BaseHTTPRequestHandler):
             "skip_download": True,
             "nocheckcertificate": False,
             "noplaylist": True,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.instagram.com/",
+            },
         }
 
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception:
-            return self._send(
-                422,
-                {
-                    "error": (
-                        "Video extract failed. Reel may be private or unavailable."
-                    )
-                },
-            )
+        info = None
+        last_error = ""
+        for candidate_url in build_candidate_urls(url):
+            try:
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(candidate_url, download=False)
+                if isinstance(info, dict):
+                    break
+            except Exception as exc:
+                last_error = str(exc)
 
         if not isinstance(info, dict):
-            return self._send(422, {"error": "Extractor response invalid"})
+            payload = {
+                "error": "Video extract failed. Reel may be restricted or rate-limited."
+            }
+            if last_error:
+                payload["detail"] = last_error[:220]
+            return self._send(422, payload)
 
         media_url = info.get("url")
         if not isinstance(media_url, str) or not media_url.startswith("http"):
