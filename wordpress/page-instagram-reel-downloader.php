@@ -188,7 +188,10 @@ get_header();
       <input type="hidden" name="reel_download_action" value="1">
 
       <label for="irm-url">Reel URL</label>
-      <input id="irm-url" name="video_url" type="url" placeholder="https://www.instagram.com/reel/..." required>
+      <div class="irm-input-row">
+        <input id="irm-url" name="video_url" type="url" placeholder="https://www.instagram.com/reel/..." required>
+        <button id="irm-paste-btn" type="button">Paste & Download</button>
+      </div>
 
       <button id="irm-btn" type="submit">
         <span id="irm-btn-text">Download Reel</span>
@@ -206,7 +209,10 @@ get_header();
   .irm-sub { margin:0 0 20px; color:#475467; }
   #irm-form { display:grid; gap:12px; }
   #irm-form label { font-weight:600; color:#344054; }
+  .irm-input-row { display:grid; grid-template-columns: 1fr auto; gap:10px; }
   #irm-form input { height:46px; border:1px solid #d0d5dd; border-radius:10px; padding:0 14px; }
+  #irm-paste-btn { height:46px; border:1px solid #d0d5dd; border-radius:10px; background:#fff; color:#111827; font-weight:600; cursor:pointer; padding:0 14px; white-space:nowrap; }
+  #irm-paste-btn[disabled] { opacity:.7; cursor:not-allowed; }
   #irm-form button { height:46px; border:0; border-radius:10px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
   #irm-form button[disabled] { opacity:.7; cursor:not-allowed; }
   .irm-msg { min-height:24px; margin:10px 0 0; }
@@ -218,6 +224,7 @@ get_header();
   (() => {
     const form = document.getElementById('irm-form');
     const btn = document.getElementById('irm-btn');
+    const pasteBtn = document.getElementById('irm-paste-btn');
     const btnText = document.getElementById('irm-btn-text');
     const msg = document.getElementById('irm-msg');
     const urlInput = document.getElementById('irm-url');
@@ -244,15 +251,15 @@ get_header();
       return simple && simple[1] ? simple[1] : 'reel_download.mp4';
     };
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
+    const handleSubmit = async () => {
       const url = urlInput.value.trim();
       if (!isSupportedUrl(url)) {
         setMsg('Only Instagram/Facebook URLs are supported.', 'error');
-        return;
+        return false;
       }
 
       btn.disabled = true;
+      pasteBtn.disabled = true;
       btnText.textContent = 'Downloading...';
       setMsg('Verifying link...');
 
@@ -271,7 +278,7 @@ get_header();
             if (data && data.message) errorMessage = data.message;
           } catch (_) {}
           setMsg(errorMessage, 'error');
-          return;
+          return false;
         }
 
         const blob = await response.blob();
@@ -285,11 +292,38 @@ get_header();
         a.remove();
         URL.revokeObjectURL(blobUrl);
         setMsg('Download started successfully.', 'success');
+        return true;
       } catch (_) {
         setMsg('Server connection issue. Please try again.', 'error');
+        return false;
       } finally {
         btn.disabled = false;
+        pasteBtn.disabled = false;
         btnText.textContent = 'Download Reel';
+      }
+    };
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await handleSubmit();
+    });
+
+    pasteBtn.addEventListener('click', async () => {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        setMsg('Clipboard access is not available. Please paste manually (Ctrl+V).', 'error');
+        return;
+      }
+
+      try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (!text) {
+          setMsg('Clipboard is empty. Copy a reel URL first.', 'error');
+          return;
+        }
+        urlInput.value = text;
+        await handleSubmit();
+      } catch (_) {
+        setMsg('Clipboard permission denied. Please allow clipboard access and try again.', 'error');
       }
     });
   })();
