@@ -207,7 +207,7 @@ get_header();
 <main class="irm-wrap">
   <section class="irm-card">
     <h1>Instagram / Facebook Reel Downloader</h1>
-    <p class="irm-sub">Paste a reel URL, preview it, then download.</p>
+    <p class="irm-sub">Paste a reel URL, preview it, then download instantly.</p>
 
     <form id="irm-form" method="post" action="">
       <?php wp_nonce_field('reel_downloader_submit'); ?>
@@ -226,12 +226,7 @@ get_header();
 
     <div id="irm-preview-wrap" class="irm-preview-wrap" hidden>
       <video id="irm-preview" controls playsinline preload="metadata"></video>
-      <form id="irm-download-form" method="post" action="">
-        <?php wp_nonce_field('reel_downloader_submit'); ?>
-        <input type="hidden" name="reel_download_action" value="1">
-        <input type="hidden" id="irm-download-url" name="video_url" value="">
-        <button id="irm-download-btn" type="submit">Download Reel</button>
-      </form>
+      <button id="irm-download-btn" type="button">Download Reel</button>
     </div>
 
     <p id="irm-msg" class="irm-msg" aria-live="polite"></p>
@@ -271,9 +266,9 @@ get_header();
     const urlInput = document.getElementById('irm-url');
     const previewWrap = document.getElementById('irm-preview-wrap');
     const previewVideo = document.getElementById('irm-preview');
-    const downloadUrlInput = document.getElementById('irm-download-url');
-    const downloadForm = document.getElementById('irm-download-form');
     const downloadBtn = document.getElementById('irm-download-btn');
+    let previewMediaUrl = '';
+    let previewFilename = 'reel_download.mp4';
 
     const setMsg = (text, type = '') => {
       msg.textContent = text;
@@ -320,14 +315,15 @@ get_header();
         }
 
         const data = await response.json();
-        if (!data || !data.media_url || !data.source) {
+        if (!data || !data.media_url) {
           setMsg('Invalid preview response from server.', 'error');
           return false;
         }
 
         previewVideo.src = data.media_url;
         previewWrap.hidden = false;
-        downloadUrlInput.value = data.source;
+        previewMediaUrl = data.media_url;
+        previewFilename = data.filename || 'reel_download.mp4';
         setMsg('Preview loaded. Click Download Reel below.', 'success');
         return true;
       } catch (_) {
@@ -364,9 +360,27 @@ get_header();
       }
     });
 
-    downloadForm.addEventListener('submit', () => {
+    downloadBtn.addEventListener('click', () => {
+      if (!previewMediaUrl) {
+        setMsg('Load preview first, then download.', 'error');
+        return;
+      }
+
       downloadBtn.disabled = true;
       downloadBtn.textContent = 'Preparing download...';
+
+      const link = document.createElement('a');
+      link.href = previewMediaUrl;
+      link.download = previewFilename;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      setTimeout(() => {
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = 'Download Reel';
+      }, 900);
     });
   })();
 </script>
