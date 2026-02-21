@@ -16,6 +16,29 @@ $apiUrl = defined('REEL_DOWNLOADER_API_URL')
 $apiToken = defined('REEL_DOWNLOADER_API_TOKEN')
     ? (string) REEL_DOWNLOADER_API_TOKEN
     : 'ba7289cad95b333eb685ceaf63fe423b55eae260aa14d5fe853481c9dde53506';
+$seoTitle = 'Instagram Reel Downloader Online | HD MP4, Fast & Free';
+$seoDescription = 'Download Instagram and Facebook reels in HD MP4 instantly. Paste URL, preview video, and save on mobile or desktop for free. No app required.';
+
+add_filter('pre_get_document_title', static function () use ($seoTitle): string {
+    return $seoTitle;
+}, 99);
+
+add_action('wp_head', static function () use ($seoTitle, $seoDescription): void {
+    $canonicalUrl = get_permalink();
+    if (!is_string($canonicalUrl) || $canonicalUrl === '') {
+        $canonicalUrl = home_url(add_query_arg([], $GLOBALS['wp']->request ?? ''));
+    }
+
+    echo '<meta name="description" content="' . esc_attr($seoDescription) . '">' . "\n";
+    echo '<link rel="canonical" href="' . esc_url($canonicalUrl) . '">' . "\n";
+    echo '<meta property="og:type" content="website">' . "\n";
+    echo '<meta property="og:title" content="' . esc_attr($seoTitle) . '">' . "\n";
+    echo '<meta property="og:description" content="' . esc_attr($seoDescription) . '">' . "\n";
+    echo '<meta property="og:url" content="' . esc_url($canonicalUrl) . '">' . "\n";
+    echo '<meta name="twitter:card" content="summary_large_image">' . "\n";
+    echo '<meta name="twitter:title" content="' . esc_attr($seoTitle) . '">' . "\n";
+    echo '<meta name="twitter:description" content="' . esc_attr($seoDescription) . '">' . "\n";
+}, 99);
 
 function reel_downloader_fail(string $message, int $status = 400): void
 {
