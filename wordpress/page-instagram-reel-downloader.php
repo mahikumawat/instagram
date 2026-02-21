@@ -115,7 +115,11 @@ function reel_downloader_extract_from_api(string $videoUrl, string $apiUrl, stri
         reel_downloader_fail('Invalid API token. Please verify your token.', 401);
     }
     if (!empty($data['error']) && is_string($data['error'])) {
-        reel_downloader_fail($data['error'], $status >= 400 ? $status : 422);
+        $errorMessage = $data['error'];
+        if (!empty($data['detail']) && is_string($data['detail'])) {
+            $errorMessage .= ' (' . $data['detail'] . ')';
+        }
+        reel_downloader_fail($errorMessage, $status >= 400 ? $status : 422);
     }
     if ($status >= 500) {
         reel_downloader_fail('The API server returned an error. Please try again later.', 502);
@@ -140,8 +144,46 @@ function reel_downloader_extract_from_api(string $videoUrl, string $apiUrl, stri
     return [$mediaUrl, $fileName];
 }
 
+function reel_downloader_cache_preview(string $sourceUrl, string $mediaUrl, string $fileName): string
+{
+    $downloadKey = wp_generate_password(32, false, false);
+    set_transient(
+        'reel_dl_' . $downloadKey,
+        [
+            'source' => $sourceUrl,
+            'media_url' => $mediaUrl,
+            'filename' => $fileName,
+        ],
+        15 * MINUTE_IN_SECONDS
+    );
+    return $downloadKey;
+}
+
+function reel_downloader_get_cached_preview(string $downloadKey): array
+{
+    if ($downloadKey === '' || !preg_match('/^[A-Za-z0-9]+$/', $downloadKey)) {
+        return [];
+    }
+
+    $cached = get_transient('reel_dl_' . $downloadKey);
+    return is_array($cached) ? $cached : [];
+}
+
 function reel_downloader_stream_remote_file(string $fileUrl, string $downloadName): void
 {
+    if (headers_sent()) {
+        reel_downloader_fail('Unable to send download headers. Please refresh and try again.', 500);
+    }
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    $safeName = sanitize_file_name($downloadName);
+    if ($safeName === '') {
+        $safeName = 'reel_' . date('Ymd_His') . '.mp4';
+    }
+
     $ch = curl_init($fileUrl);
     curl_setopt_array($ch, [
         CURLOPT_FOLLOWLOCATION => true,
@@ -150,11 +192,14 @@ function reel_downloader_stream_remote_file(string $fileUrl, string $downloadNam
         CURLOPT_BUFFERSIZE => 8192,
         CURLOPT_HEADER => false,
         CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_USERAGENT => (string) ($_SERVER['HTTP_USER_AGENT'] ?? 'Mozilla/5.0'),
     ]);
 
     header('Content-Description: File Transfer');
     header('Content-Type: application/octet-stream');
-    header('Content-Disposition: attachment; filename="' . sanitize_file_name($downloadName) . '"');
+    header('Content-Disposition: attachment; filename="' . $safeName . '"; filename*=UTF-8\'\'' . rawurlencode($safeName));
+    header('Content-Transfer-Encoding: binary');
+    header('X-Content-Type-Options: nosniff');
     header('Cache-Control: no-cache, must-revalidate');
     header('Pragma: public');
 
@@ -184,19 +229,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['reel_preview_action'])) {
         $videoUrl = reel_downloader_validate_video_url((string) ($_POST['video_url'] ?? ''));
         [$mediaUrl, $fileName] = reel_downloader_extract_from_api($videoUrl, $apiUrl, $apiToken);
+        $downloadKey = reel_downloader_cache_preview($videoUrl, $mediaUrl, $fileName);
         header('Content-Type: application/json; charset=utf-8');
         echo wp_json_encode([
             'ok' => true,
             'media_url' => $mediaUrl,
             'filename' => $fileName,
             'source' => $videoUrl,
+            'download_key' => $downloadKey,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         exit;
     }
 
     if (isset($_POST['reel_download_action'])) {
         $videoUrl = reel_downloader_validate_video_url((string) ($_POST['video_url'] ?? ''));
-        [$mediaUrl, $fileName] = reel_downloader_extract_from_api($videoUrl, $apiUrl, $apiToken);
+        $downloadKey = trim((string) ($_POST['download_key'] ?? ''));
+        $cached = reel_downloader_get_cached_preview($downloadKey);
+        if ($cached === []) {
+            reel_downloader_fail('Preview expired. Please load preview again and then download.', 410);
+        }
+
+        $cachedSource = (string) ($cached['source'] ?? '');
+        $mediaUrl = (string) ($cached['media_url'] ?? '');
+        $fileName = (string) ($cached['filename'] ?? '');
+
+        if ($cachedSource !== '' && $cachedSource !== $videoUrl) {
+            reel_downloader_fail('Preview does not match the current URL. Load preview again.', 422);
+        }
+        if (!filter_var($mediaUrl, FILTER_VALIDATE_URL)) {
+            reel_downloader_fail('Preview data is invalid. Load preview again.', 422);
+        }
+        if ($fileName === '') {
+            $fileName = 'reel_' . date('Ymd_His') . '.mp4';
+        }
+
         reel_downloader_stream_remote_file($mediaUrl, $fileName);
     }
 }
@@ -226,6 +292,7 @@ get_header();
         <?php wp_nonce_field('reel_downloader_submit'); ?>
         <input type="hidden" name="reel_download_action" value="1">
         <input type="hidden" id="irm-download-url" name="video_url" value="">
+        <input type="hidden" id="irm-download-key" name="download_key" value="">
         <button id="irm-download-btn" type="submit">Download Reel</button>
       </form>
     </div>
@@ -264,6 +331,7 @@ get_header();
     const previewWrap = document.getElementById('irm-preview-wrap');
     const previewVideo = document.getElementById('irm-preview');
     const downloadUrlInput = document.getElementById('irm-download-url');
+    const downloadKeyInput = document.getElementById('irm-download-key');
     const downloadForm = document.getElementById('irm-download-form');
     const downloadBtn = document.getElementById('irm-download-btn');
 
@@ -311,7 +379,7 @@ get_header();
         }
 
         const data = await response.json();
-        if (!data || !data.media_url || !data.source) {
+        if (!data || !data.media_url || !data.source || !data.download_key) {
           setMsg('Invalid preview response from server.', 'error');
           return false;
         }
@@ -319,6 +387,7 @@ get_header();
         previewVideo.src = data.media_url;
         previewWrap.hidden = false;
         downloadUrlInput.value = data.source;
+        downloadKeyInput.value = data.download_key;
         setMsg('Preview loaded. Click Download Reel below.', 'success');
         return true;
       } catch (_) {
@@ -359,10 +428,22 @@ get_header();
         setMsg('Load preview first, then download.', 'error');
         return false;
       }
+      if (!downloadKeyInput.value.trim()) {
+        setMsg('Preview token missing. Load preview again.', 'error');
+        return false;
+      }
 
       downloadBtn.disabled = true;
       downloadBtn.textContent = 'Preparing download...';
       return true;
+    });
+
+    urlInput.addEventListener('input', () => {
+      downloadKeyInput.value = '';
+      downloadUrlInput.value = '';
+      previewWrap.hidden = true;
+      previewVideo.removeAttribute('src');
+      previewVideo.load();
     });
   })();
 </script>
