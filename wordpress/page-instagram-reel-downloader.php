@@ -216,12 +216,8 @@ get_header();
       <label for="irm-url">Reel URL</label>
       <div class="irm-input-row">
         <input id="irm-url" name="video_url" type="url" placeholder="https://www.instagram.com/reel/..." required>
-        <button id="irm-paste-btn" type="button">Paste & Preview</button>
+        <button id="irm-paste-btn" type="button">Paste URL</button>
       </div>
-
-      <button id="irm-btn" type="submit">
-        <span id="irm-btn-text">Show Preview</span>
-      </button>
     </form>
 
     <div id="irm-preview-wrap" class="irm-preview-wrap" hidden>
@@ -242,10 +238,8 @@ get_header();
   #irm-form label { font-weight:600; color:#344054; }
   .irm-input-row { display:grid; grid-template-columns: 1fr auto; gap:10px; }
   #irm-form input { height:46px; border:1px solid #d0d5dd; border-radius:10px; padding:0 14px; }
-  #irm-paste-btn { height:46px; border:1px solid #d0d5dd; border-radius:10px; background:#fff; color:#111827; font-weight:600; cursor:pointer; padding:0 14px; white-space:nowrap; }
+  #irm-paste-btn { height:46px; border:1px solid #d0d5dd; border-radius:10px; background:#111827; color:#fff; font-weight:600; cursor:pointer; padding:0 14px; white-space:nowrap; }
   #irm-paste-btn[disabled] { opacity:.7; cursor:not-allowed; }
-  #irm-btn { height:46px; border:0; border-radius:10px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
-  #irm-btn[disabled] { opacity:.7; cursor:not-allowed; }
   .irm-preview-wrap { margin-top:14px; border:1px solid #e4e7ec; border-radius:12px; padding:12px; background:#f9fafb; }
   #irm-preview { width:100%; border-radius:10px; background:#000; max-height:520px; }
   #irm-download-form { margin-top:12px; }
@@ -259,9 +253,7 @@ get_header();
 <script>
   (() => {
     const form = document.getElementById('irm-form');
-    const btn = document.getElementById('irm-btn');
     const pasteBtn = document.getElementById('irm-paste-btn');
-    const btnText = document.getElementById('irm-btn-text');
     const msg = document.getElementById('irm-msg');
     const urlInput = document.getElementById('irm-url');
     const previewWrap = document.getElementById('irm-preview-wrap');
@@ -291,9 +283,8 @@ get_header();
         return false;
       }
 
-      btn.disabled = true;
       pasteBtn.disabled = true;
-      btnText.textContent = 'Loading preview...';
+      pasteBtn.textContent = 'Loading...';
       setMsg('Verifying link...');
 
       try {
@@ -330,9 +321,8 @@ get_header();
         setMsg('Server connection issue. Please try again.', 'error');
         return false;
       } finally {
-        btn.disabled = false;
         pasteBtn.disabled = false;
-        btnText.textContent = 'Show Preview';
+        pasteBtn.textContent = 'Paste URL';
       }
     };
 
