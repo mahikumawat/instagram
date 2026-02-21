@@ -44,6 +44,31 @@ function reel_downloader_is_supported_url(string $url): bool
     return false;
 }
 
+function reel_downloader_validate_setup(string $apiUrl, string $apiToken): void
+{
+    if ($apiUrl === '' || !filter_var($apiUrl, FILTER_VALIDATE_URL)) {
+        reel_downloader_fail('API URL is not configured correctly.', 500);
+    }
+    if ($apiToken === '' || $apiToken === 'CHANGE_ME_TOKEN') {
+        reel_downloader_fail('API token is not configured.', 500);
+    }
+}
+
+function reel_downloader_validate_video_url(string $videoUrl): string
+{
+    $videoUrl = trim($videoUrl);
+    if ($videoUrl === '') {
+        reel_downloader_fail('Reel URL is required.');
+    }
+    if (!filter_var($videoUrl, FILTER_VALIDATE_URL)) {
+        reel_downloader_fail('The URL appears invalid. Please paste the full URL.');
+    }
+    if (!reel_downloader_is_supported_url($videoUrl)) {
+        reel_downloader_fail('Only Instagram/Facebook reel URLs are supported.');
+    }
+    return $videoUrl;
+}
+
 function reel_downloader_extract_from_api(string $videoUrl, string $apiUrl, string $apiToken): array
 {
     if (!function_exists('curl_init')) {
@@ -149,30 +174,31 @@ function reel_downloader_stream_remote_file(string $fileUrl, string $downloadNam
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reel_download_action'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($_POST['_wpnonce']) || !wp_verify_nonce((string) $_POST['_wpnonce'], 'reel_downloader_submit')) {
         reel_downloader_fail('Security check failed. Refresh the page and try again.', 403);
     }
 
-    $videoUrl = trim((string) ($_POST['video_url'] ?? ''));
-    if ($videoUrl === '') {
-        reel_downloader_fail('Reel URL is required.');
-    }
-    if (!filter_var($videoUrl, FILTER_VALIDATE_URL)) {
-        reel_downloader_fail('The URL appears invalid. Please paste the full URL.');
-    }
-    if (!reel_downloader_is_supported_url($videoUrl)) {
-        reel_downloader_fail('Only Instagram/Facebook reel URLs are supported.');
-    }
-    if ($apiUrl === '' || !filter_var($apiUrl, FILTER_VALIDATE_URL)) {
-        reel_downloader_fail('API URL is not configured correctly.', 500);
-    }
-    if ($apiToken === '' || $apiToken === 'CHANGE_ME_TOKEN') {
-        reel_downloader_fail('API token is not configured.', 500);
+    reel_downloader_validate_setup($apiUrl, $apiToken);
+
+    if (isset($_POST['reel_preview_action'])) {
+        $videoUrl = reel_downloader_validate_video_url((string) ($_POST['video_url'] ?? ''));
+        [$mediaUrl, $fileName] = reel_downloader_extract_from_api($videoUrl, $apiUrl, $apiToken);
+        header('Content-Type: application/json; charset=utf-8');
+        echo wp_json_encode([
+            'ok' => true,
+            'media_url' => $mediaUrl,
+            'filename' => $fileName,
+            'source' => $videoUrl,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
     }
 
-    [$mediaUrl, $fileName] = reel_downloader_extract_from_api($videoUrl, $apiUrl, $apiToken);
-    reel_downloader_stream_remote_file($mediaUrl, $fileName);
+    if (isset($_POST['reel_download_action'])) {
+        $videoUrl = reel_downloader_validate_video_url((string) ($_POST['video_url'] ?? ''));
+        [$mediaUrl, $fileName] = reel_downloader_extract_from_api($videoUrl, $apiUrl, $apiToken);
+        reel_downloader_stream_remote_file($mediaUrl, $fileName);
+    }
 }
 
 get_header();
@@ -181,22 +207,32 @@ get_header();
 <main class="irm-wrap">
   <section class="irm-card">
     <h1>Instagram / Facebook Reel Downloader</h1>
-    <p class="irm-sub">Paste a reel URL and download it.</p>
+    <p class="irm-sub">Paste a reel URL, preview it, then download.</p>
 
     <form id="irm-form" method="post" action="">
       <?php wp_nonce_field('reel_downloader_submit'); ?>
-      <input type="hidden" name="reel_download_action" value="1">
+      <input type="hidden" name="reel_preview_action" value="1">
 
       <label for="irm-url">Reel URL</label>
       <div class="irm-input-row">
         <input id="irm-url" name="video_url" type="url" placeholder="https://www.instagram.com/reel/..." required>
-        <button id="irm-paste-btn" type="button">Paste & Download</button>
+        <button id="irm-paste-btn" type="button">Paste & Preview</button>
       </div>
 
       <button id="irm-btn" type="submit">
-        <span id="irm-btn-text">Download Reel</span>
+        <span id="irm-btn-text">Show Preview</span>
       </button>
     </form>
+
+    <div id="irm-preview-wrap" class="irm-preview-wrap" hidden>
+      <video id="irm-preview" controls playsinline preload="metadata"></video>
+      <form id="irm-download-form" method="post" action="">
+        <?php wp_nonce_field('reel_downloader_submit'); ?>
+        <input type="hidden" name="reel_download_action" value="1">
+        <input type="hidden" id="irm-download-url" name="video_url" value="">
+        <button id="irm-download-btn" type="submit">Download Reel</button>
+      </form>
+    </div>
 
     <p id="irm-msg" class="irm-msg" aria-live="polite"></p>
   </section>
@@ -213,8 +249,13 @@ get_header();
   #irm-form input { height:46px; border:1px solid #d0d5dd; border-radius:10px; padding:0 14px; }
   #irm-paste-btn { height:46px; border:1px solid #d0d5dd; border-radius:10px; background:#fff; color:#111827; font-weight:600; cursor:pointer; padding:0 14px; white-space:nowrap; }
   #irm-paste-btn[disabled] { opacity:.7; cursor:not-allowed; }
-  #irm-form button { height:46px; border:0; border-radius:10px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
-  #irm-form button[disabled] { opacity:.7; cursor:not-allowed; }
+  #irm-btn { height:46px; border:0; border-radius:10px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
+  #irm-btn[disabled] { opacity:.7; cursor:not-allowed; }
+  .irm-preview-wrap { margin-top:14px; border:1px solid #e4e7ec; border-radius:12px; padding:12px; background:#f9fafb; }
+  #irm-preview { width:100%; border-radius:10px; background:#000; max-height:520px; }
+  #irm-download-form { margin-top:12px; }
+  #irm-download-btn { width:100%; height:46px; border:0; border-radius:10px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
+  #irm-download-btn[disabled] { opacity:.7; cursor:not-allowed; }
   .irm-msg { min-height:24px; margin:10px 0 0; }
   .irm-msg.error { color:#b42318; }
   .irm-msg.success { color:#027a48; }
@@ -228,6 +269,11 @@ get_header();
     const btnText = document.getElementById('irm-btn-text');
     const msg = document.getElementById('irm-msg');
     const urlInput = document.getElementById('irm-url');
+    const previewWrap = document.getElementById('irm-preview-wrap');
+    const previewVideo = document.getElementById('irm-preview');
+    const downloadUrlInput = document.getElementById('irm-download-url');
+    const downloadForm = document.getElementById('irm-download-form');
+    const downloadBtn = document.getElementById('irm-download-btn');
 
     const setMsg = (text, type = '') => {
       msg.textContent = text;
@@ -243,15 +289,7 @@ get_header();
       }
     };
 
-    const readFilename = (headers) => {
-      const cd = headers.get('Content-Disposition') || '';
-      const utf = cd.match(/filename\*=UTF-8''([^;]+)/i);
-      if (utf && utf[1]) return decodeURIComponent(utf[1]);
-      const simple = cd.match(/filename="?([^"]+)"?/i);
-      return simple && simple[1] ? simple[1] : 'reel_download.mp4';
-    };
-
-    const handleSubmit = async () => {
+    const handlePreview = async () => {
       const url = urlInput.value.trim();
       if (!isSupportedUrl(url)) {
         setMsg('Only Instagram/Facebook URLs are supported.', 'error');
@@ -260,7 +298,7 @@ get_header();
 
       btn.disabled = true;
       pasteBtn.disabled = true;
-      btnText.textContent = 'Downloading...';
+      btnText.textContent = 'Loading preview...';
       setMsg('Verifying link...');
 
       try {
@@ -272,7 +310,7 @@ get_header();
         });
 
         if (!response.ok) {
-          let errorMessage = 'Download failed. Please try again.';
+          let errorMessage = 'Preview failed. Please try again.';
           try {
             const data = await response.json();
             if (data && data.message) errorMessage = data.message;
@@ -281,17 +319,16 @@ get_header();
           return false;
         }
 
-        const blob = await response.blob();
-        const fileName = readFilename(response.headers);
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(blobUrl);
-        setMsg('Download started successfully.', 'success');
+        const data = await response.json();
+        if (!data || !data.media_url || !data.source) {
+          setMsg('Invalid preview response from server.', 'error');
+          return false;
+        }
+
+        previewVideo.src = data.media_url;
+        previewWrap.hidden = false;
+        downloadUrlInput.value = data.source;
+        setMsg('Preview loaded. Click Download Reel below.', 'success');
         return true;
       } catch (_) {
         setMsg('Server connection issue. Please try again.', 'error');
@@ -299,13 +336,13 @@ get_header();
       } finally {
         btn.disabled = false;
         pasteBtn.disabled = false;
-        btnText.textContent = 'Download Reel';
+        btnText.textContent = 'Show Preview';
       }
     };
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      await handleSubmit();
+      await handlePreview();
     });
 
     pasteBtn.addEventListener('click', async () => {
@@ -321,10 +358,15 @@ get_header();
           return;
         }
         urlInput.value = text;
-        await handleSubmit();
+        await handlePreview();
       } catch (_) {
         setMsg('Clipboard permission denied. Please allow clipboard access and try again.', 'error');
       }
+    });
+
+    downloadForm.addEventListener('submit', () => {
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = 'Preparing download...';
     });
   })();
 </script>
