@@ -47,12 +47,12 @@ function reel_downloader_is_supported_url(string $url): bool
 function reel_downloader_extract_from_api(string $videoUrl, string $apiUrl, string $apiToken): array
 {
     if (!function_exists('curl_init')) {
-        reel_downloader_fail('Server pe cURL extension enabled nahi hai.', 500);
+        reel_downloader_fail('cURL extension is not enabled on the server.', 500);
     }
 
     $payload = wp_json_encode(['url' => $videoUrl], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($payload === false) {
-        reel_downloader_fail('Request payload create nahi ho paya.', 500);
+        reel_downloader_fail('Could not create request payload.', 500);
     }
 
     $ch = curl_init($apiUrl);
@@ -87,24 +87,24 @@ function reel_downloader_extract_from_api(string $videoUrl, string $apiUrl, stri
         reel_downloader_fail('API request failed: ' . $curlError, 502);
     }
     if ($status === 401 || $status === 403) {
-        reel_downloader_fail('API token invalid hai. Token check karein.', 401);
+        reel_downloader_fail('Invalid API token. Please verify your token.', 401);
     }
     if (!empty($data['error']) && is_string($data['error'])) {
         reel_downloader_fail($data['error'], $status >= 400 ? $status : 422);
     }
     if ($status >= 500) {
-        reel_downloader_fail('API server pe error aa raha hai. Thodi der baad try karein.', 502);
+        reel_downloader_fail('The API server returned an error. Please try again later.', 502);
     }
     if ($status < 200 || $status >= 300 || $rawBody === '') {
-        reel_downloader_fail('API se valid response nahi mila. HTTP ' . $status, 502);
+        reel_downloader_fail('No valid response received from API. HTTP ' . $status, 502);
     }
     if ($data === []) {
-        reel_downloader_fail('API JSON response invalid hai.', 502);
+        reel_downloader_fail('Invalid JSON response from API.', 502);
     }
 
     $mediaUrl = (string) ($data['media_url'] ?? '');
     if (!filter_var($mediaUrl, FILTER_VALIDATE_URL)) {
-        reel_downloader_fail('API ne valid media URL return nahi kiya.', 422);
+        reel_downloader_fail('API did not return a valid media URL.', 422);
     }
 
     $fileName = (string) ($data['filename'] ?? '');
@@ -144,31 +144,31 @@ function reel_downloader_stream_remote_file(string $fileUrl, string $downloadNam
     curl_close($ch);
 
     if ($ok === false || $status >= 400) {
-        reel_downloader_fail('Video stream fail ho gaya. Dubara try karein.', 502);
+        reel_downloader_fail('Video streaming failed. Please try again.', 502);
     }
     exit;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reel_download_action'])) {
     if (!isset($_POST['_wpnonce']) || !wp_verify_nonce((string) $_POST['_wpnonce'], 'reel_downloader_submit')) {
-        reel_downloader_fail('Security check fail ho gaya. Page refresh karke dubara try karein.', 403);
+        reel_downloader_fail('Security check failed. Refresh the page and try again.', 403);
     }
 
     $videoUrl = trim((string) ($_POST['video_url'] ?? ''));
     if ($videoUrl === '') {
-        reel_downloader_fail('Reel URL required hai.');
+        reel_downloader_fail('Reel URL is required.');
     }
     if (!filter_var($videoUrl, FILTER_VALIDATE_URL)) {
-        reel_downloader_fail('URL invalid lag raha hai. Full URL paste karein.');
+        reel_downloader_fail('The URL appears invalid. Please paste the full URL.');
     }
     if (!reel_downloader_is_supported_url($videoUrl)) {
-        reel_downloader_fail('Sirf Instagram/Facebook reel URL support hota hai.');
+        reel_downloader_fail('Only Instagram/Facebook reel URLs are supported.');
     }
     if ($apiUrl === '' || !filter_var($apiUrl, FILTER_VALIDATE_URL)) {
-        reel_downloader_fail('API URL sahi set nahi hai.', 500);
+        reel_downloader_fail('API URL is not configured correctly.', 500);
     }
     if ($apiToken === '' || $apiToken === 'CHANGE_ME_TOKEN') {
-        reel_downloader_fail('API token set nahi hai.', 500);
+        reel_downloader_fail('API token is not configured.', 500);
     }
 
     [$mediaUrl, $fileName] = reel_downloader_extract_from_api($videoUrl, $apiUrl, $apiToken);
@@ -248,13 +248,13 @@ get_header();
       e.preventDefault();
       const url = urlInput.value.trim();
       if (!isSupportedUrl(url)) {
-        setMsg('Sirf Instagram/Facebook URL supported hain.', 'error');
+        setMsg('Only Instagram/Facebook URLs are supported.', 'error');
         return;
       }
 
       btn.disabled = true;
       btnText.textContent = 'Downloading...';
-      setMsg('Link verify ho raha hai...');
+      setMsg('Verifying link...');
 
       try {
         const formData = new FormData(form);
@@ -265,7 +265,7 @@ get_header();
         });
 
         if (!response.ok) {
-          let errorMessage = 'Download fail ho gaya. Dubara try karein.';
+          let errorMessage = 'Download failed. Please try again.';
           try {
             const data = await response.json();
             if (data && data.message) errorMessage = data.message;
@@ -284,9 +284,9 @@ get_header();
         a.click();
         a.remove();
         URL.revokeObjectURL(blobUrl);
-        setMsg('Download start ho gaya.', 'success');
+        setMsg('Download started successfully.', 'success');
       } catch (_) {
-        setMsg('Server connection issue. Dubara try karein.', 'error');
+        setMsg('Server connection issue. Please try again.', 'error');
       } finally {
         btn.disabled = false;
         btnText.textContent = 'Download Reel';
