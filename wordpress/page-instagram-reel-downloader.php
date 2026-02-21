@@ -181,7 +181,7 @@ get_header();
 <main class="irm-wrap">
   <section class="irm-card">
     <h1>Instagram / Facebook Reel Downloader</h1>
-    <p class="irm-sub">Reel URL paste karke download karein.</p>
+    <p class="irm-sub">Paste a reel URL and download it.</p>
 
     <form id="irm-form" method="post" action="">
       <?php wp_nonce_field('reel_downloader_submit'); ?>
