@@ -5,11 +5,15 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 import html
+import tempfile
+import time
 
 from yt_dlp import YoutubeDL
 
 API_TOKEN = os.environ.get("API_TOKEN", "")
 SUPPORTED_HOSTS = ("instagram.com", "facebook.com", "fb.watch")
+INSTAGRAM_SESSIONID = os.environ.get("INSTAGRAM_SESSIONID", "").strip()
+INSTAGRAM_COOKIES = os.environ.get("INSTAGRAM_COOKIES", "").strip()
 
 
 def sanitize_filename(title: str, ext: str) -> str:
@@ -17,6 +21,51 @@ def sanitize_filename(title: str, ext: str) -> str:
     safe = safe.strip("._") or "reel"
     ext = (ext or "mp4").strip(".")[:5] or "mp4"
     return f"{safe}.{ext}"
+
+
+def build_cookie_header() -> str:
+    if INSTAGRAM_COOKIES:
+        return INSTAGRAM_COOKIES
+    if INSTAGRAM_SESSIONID:
+        return f"sessionid={INSTAGRAM_SESSIONID}"
+    return ""
+
+
+def build_cookiefile() -> str:
+    cookie_header = build_cookie_header()
+    if not cookie_header:
+        return ""
+
+    entries: list[tuple[str, str]] = []
+    for chunk in cookie_header.split(";"):
+        part = chunk.strip()
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if not name or not value:
+            continue
+        entries.append((name, value))
+
+    if not entries:
+        return ""
+
+    expires = str(int(time.time()) + 30 * 24 * 60 * 60)
+    lines = ["# Netscape HTTP Cookie File"]
+    for name, value in entries:
+        lines.append(
+            "\t".join(
+                [".instagram.com", "TRUE", "/", "TRUE", expires, name, value]
+            )
+        )
+
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", prefix="ig_cookie_", suffix=".txt", delete=False
+    )
+    with handle:
+        handle.write("\n".join(lines) + "\n")
+    return handle.name
 
 
 def decode_escaped_url(value: str) -> str:
@@ -61,25 +110,29 @@ def build_candidate_urls(url: str) -> list[str]:
     return candidates
 
 
-def fetch_html(url: str) -> str:
+def fetch_html(url: str, cookie_header: str = "") -> str:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Mobile/15E148 Safari/604.1"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.instagram.com/",
+    }
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
     request = Request(
         url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
-                "Mobile/15E148 Safari/604.1"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.instagram.com/",
-        },
+        headers=headers,
     )
     with urlopen(request, timeout=25) as response:
         return response.read().decode("utf-8", errors="ignore")
 
 
-def extract_from_public_html(url: str) -> dict | None:
-    page = fetch_html(url)
+def extract_from_public_html(url: str, cookie_header: str = "") -> dict | None:
+    page = fetch_html(url, cookie_header)
     media_patterns = [
         r'<meta[^>]+property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']',
         r'"video_url":"(https:[^"]+)"',
@@ -168,6 +221,12 @@ class handler(BaseHTTPRequestHandler):
                 "Referer": "https://www.instagram.com/",
             },
         }
+        cookie_header = build_cookie_header()
+        cookiefile = build_cookiefile()
+        if cookie_header:
+            ydl_opts["http_headers"]["Cookie"] = cookie_header
+        if cookiefile:
+            ydl_opts["cookiefile"] = cookiefile
 
         info = None
         errors: list[str] = []
@@ -183,7 +242,7 @@ class handler(BaseHTTPRequestHandler):
         if not isinstance(info, dict):
             for candidate_url in build_candidate_urls(url):
                 try:
-                    info = extract_from_public_html(candidate_url)
+                    info = extract_from_public_html(candidate_url, cookie_header)
                     if isinstance(info, dict):
                         break
                 except Exception as exc:
@@ -193,6 +252,15 @@ class handler(BaseHTTPRequestHandler):
             payload = {
                 "error": "Video extract failed. Reel may be restricted or rate-limited."
             }
+            combined = " | ".join(errors).lower()
+            if (
+                ("login required" in combined or "rate-limit" in combined)
+                and not cookie_header
+            ):
+                payload["hint"] = (
+                    "Set INSTAGRAM_SESSIONID (or INSTAGRAM_COOKIES) in Vercel "
+                    "Environment Variables, then redeploy."
+                )
             if errors:
                 payload["detail"] = " | ".join(errors)[:320]
             return self._send(422, payload)
