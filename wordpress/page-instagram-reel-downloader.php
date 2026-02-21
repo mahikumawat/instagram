@@ -71,25 +71,35 @@ function reel_downloader_extract_from_api(string $videoUrl, string $apiUrl, stri
     ]);
 
     $rawBody = (string) curl_exec($ch);
+    $curlError = (string) curl_error($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
+    $data = [];
+    if ($rawBody !== '') {
+        $decoded = json_decode($rawBody, true);
+        if (is_array($decoded)) {
+            $data = $decoded;
+        }
+    }
+
+    if ($curlError !== '') {
+        reel_downloader_fail('API request failed: ' . $curlError, 502);
+    }
     if ($status === 401 || $status === 403) {
         reel_downloader_fail('API token invalid hai. Token check karein.', 401);
+    }
+    if (!empty($data['error']) && is_string($data['error'])) {
+        reel_downloader_fail($data['error'], $status >= 400 ? $status : 422);
     }
     if ($status >= 500) {
         reel_downloader_fail('API server pe error aa raha hai. Thodi der baad try karein.', 502);
     }
     if ($status < 200 || $status >= 300 || $rawBody === '') {
-        reel_downloader_fail('API se valid response nahi mila.', 502);
+        reel_downloader_fail('API se valid response nahi mila. HTTP ' . $status, 502);
     }
-
-    $data = json_decode($rawBody, true);
-    if (!is_array($data)) {
+    if ($data === []) {
         reel_downloader_fail('API JSON response invalid hai.', 502);
-    }
-    if (!empty($data['error']) && is_string($data['error'])) {
-        reel_downloader_fail($data['error'], 422);
     }
 
     $mediaUrl = (string) ($data['media_url'] ?? '');
