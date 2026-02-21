@@ -3,6 +3,8 @@ import os
 import re
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, urlunparse
+from urllib.request import Request, urlopen
+import html
 
 from yt_dlp import YoutubeDL
 
@@ -15,6 +17,14 @@ def sanitize_filename(title: str, ext: str) -> str:
     safe = safe.strip("._") or "reel"
     ext = (ext or "mp4").strip(".")[:5] or "mp4"
     return f"{safe}.{ext}"
+
+
+def decode_escaped_url(value: str) -> str:
+    value = html.unescape(value.strip())
+    value = value.replace("\\/", "/").replace("\\u0026", "&")
+    if value.startswith("//"):
+        value = "https:" + value
+    return value
 
 
 def is_supported_url(url: str) -> bool:
@@ -46,8 +56,62 @@ def build_candidate_urls(url: str) -> list[str]:
         match = re.search(r"/(reel|reels|p)/([A-Za-z0-9_-]+)", parsed.path or "")
         if match:
             add(f"https://www.instagram.com/{match.group(1)}/{match.group(2)}/")
+            add(f"https://www.instagram.com/{match.group(1)}/{match.group(2)}/embed/captioned/")
 
     return candidates
+
+
+def fetch_html(url: str) -> str:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.instagram.com/",
+        },
+    )
+    with urlopen(request, timeout=25) as response:
+        return response.read().decode("utf-8", errors="ignore")
+
+
+def extract_from_public_html(url: str) -> dict | None:
+    page = fetch_html(url)
+    media_patterns = [
+        r'<meta[^>]+property=["\']og:video(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']',
+        r'"video_url":"(https:[^"]+)"',
+        r'"playback_url":"(https:[^"]+)"',
+    ]
+
+    media_url = ""
+    for pattern in media_patterns:
+        match = re.search(pattern, page, flags=re.IGNORECASE)
+        if match:
+            media_url = decode_escaped_url(match.group(1))
+            break
+
+    if not media_url.startswith("http"):
+        return None
+
+    title = "reel"
+    title_match = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        page,
+        flags=re.IGNORECASE,
+    )
+    if title_match:
+        title = html.unescape(title_match.group(1)).strip() or "reel"
+
+    ext = "mp4"
+    path = urlparse(media_url).path
+    guessed_ext = (path.rsplit(".", 1)[-1].lower() if "." in path else "").strip()
+    if guessed_ext and len(guessed_ext) <= 5:
+        ext = guessed_ext
+
+    return {"url": media_url, "title": title, "ext": ext}
 
 
 class handler(BaseHTTPRequestHandler):
@@ -106,7 +170,7 @@ class handler(BaseHTTPRequestHandler):
         }
 
         info = None
-        last_error = ""
+        errors: list[str] = []
         for candidate_url in build_candidate_urls(url):
             try:
                 with YoutubeDL(ydl_opts) as ydl:
@@ -114,14 +178,23 @@ class handler(BaseHTTPRequestHandler):
                 if isinstance(info, dict):
                     break
             except Exception as exc:
-                last_error = str(exc)
+                errors.append(f"yt-dlp: {str(exc)}")
+
+        if not isinstance(info, dict):
+            for candidate_url in build_candidate_urls(url):
+                try:
+                    info = extract_from_public_html(candidate_url)
+                    if isinstance(info, dict):
+                        break
+                except Exception as exc:
+                    errors.append(f"html: {str(exc)}")
 
         if not isinstance(info, dict):
             payload = {
                 "error": "Video extract failed. Reel may be restricted or rate-limited."
             }
-            if last_error:
-                payload["detail"] = last_error[:220]
+            if errors:
+                payload["detail"] = " | ".join(errors)[:320]
             return self._send(422, payload)
 
         media_url = info.get("url")
